@@ -1,0 +1,50 @@
+{
+  secrets: {
+    providers: {
+      discordtoken: {
+        source: "file",
+        path: "/Users/twipc00907426/.openclaw/discord-bot-token.secret",
+        mode: "singleValue",
+      },
+      gatewaytoken: {
+        source: "file",
+        path: "/Users/twipc00907426/.openclaw/credentials/gateway-default-token.secret",
+        mode: "singleValue",
+      },
+    },
+  },
+  agents: {
+    defaults: {
+      model: {
+        primary: "openai/gpt-5.5",
+      },
+      params: {
+        cacheRetention: "long",
+      },
+      models: {
+        "codex/gpt-5.5": null,
+        "openai/gpt-5.5": {
+          alias: "gpt",
+          agentRuntime: { id: "codex" },
+          params: {
+            cacheRetention: "long",
+            transport: "auto",
+          },
+        },
+      },
+    },
+  },
+  channels: {
+    discord: {
+      token: { source: "file", provider: "discordtoken", id: "value" },
+    },
+  },
+  gateway: {
+    auth: {
+      token: { source: "file", provider: "gatewaytoken", id: "value" },
+    },
+    remote: {
+      token: { source: "file", provider: "gatewaytoken", id: "value" },
+    },
+  },
+}
