@@ -2,5 +2,11 @@
   "expectedVersion": "2026.6.11",
   "gatewayPort": 18789,
   "allowDowngrade": false,
-  "openclawBin": "openclaw"
+  "openclawBin": "openclaw",
+  "discordWebhookUrlFile": "~/.openclaw/openclaw-watchdog-discord-webhook.secret",
+  "alertCooldownHours": 23,
+  "alertOnWarnings": [
+    "model_auth_warning",
+    "version_mismatch"
+  ]
 }

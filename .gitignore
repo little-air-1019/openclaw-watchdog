@@ -7,3 +7,6 @@ backups/
 # Generated reports are written outside this repo, but keep this path ignored if
 # future tests point report output into the workspace.
 reports/
+
+# Local watchdog config may contain notification endpoints.
+scripts/openclaw-watchdog/watchdog.config.json

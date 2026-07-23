@@ -13,7 +13,7 @@ scripts/openclaw-watchdog/openclaw-watchdog uninstall
 scripts/openclaw-watchdog/openclaw-watchdog status
 ```
 
-`check` is read-only. `once` runs `check`, repairs when unhealthy or suspicious, then verifies. `repair` always creates a timestamped backup first.
+`check` is read-only. `once` runs `check`, repairs when unhealthy, then verifies. Warning-only findings are logged and can alert, but they do not trigger repair. `repair` always creates a timestamped backup first.
 
 ## Runtime Files
 
@@ -31,8 +31,30 @@ scripts/openclaw-watchdog/openclaw-watchdog status
 
 The LaunchAgent runs at login and once per day at 08:10 Asia/Taipei.
 
+## Discord Alerts
+
+Alerts are disabled until a local webhook is configured. Copy the example config:
+
+```bash
+cp scripts/openclaw-watchdog/watchdog.config.example.json scripts/openclaw-watchdog/watchdog.config.json
+```
+
+Put the webhook URL in the configured secret file:
+
+```bash
+printf '%s\n' 'https://discord.com/api/webhooks/...' > ~/.openclaw/openclaw-watchdog-discord-webhook.secret
+chmod 600 ~/.openclaw/openclaw-watchdog-discord-webhook.secret
+```
+
+By default, alerts are sent for all error findings and these warning findings:
+
+- `model_auth_warning`
+- `version_mismatch`
+
+The same alert signature is throttled by `alertCooldownHours`.
+
 ## Safety
 
-The watchdog does not run OpenClaw updates, npm global updates, downgrades, direct SQLite edits, state deletion, or Discord/LINE alerts. Downgrade remains disabled unless a local `watchdog.config.json` explicitly sets `allowDowngrade` to `true`; this first version still only logs the policy and does not implement downgrade.
+The watchdog does not run OpenClaw updates, npm global updates, downgrades, direct SQLite edits, state deletion, or OpenClaw channel alerts. Downgrade remains disabled unless a local `watchdog.config.json` explicitly sets `allowDowngrade` to `true`; this first version still only logs the policy and does not implement downgrade.
 
 To change the pinned baseline, copy `watchdog.config.example.json` to `watchdog.config.json` and update `expectedVersion`.

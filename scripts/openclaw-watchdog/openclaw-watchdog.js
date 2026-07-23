@@ -11,6 +11,7 @@ const LOG_DIR = path.join(REPO_ROOT, 'logs', 'openclaw-watchdog');
 const BACKUP_ROOT = path.join(REPO_ROOT, 'backups', 'openclaw-watchdog');
 const STATE_DIR = path.join(REPO_ROOT, '.state', 'openclaw-watchdog');
 const LOCK_DIR = path.join(STATE_DIR, 'run.lock');
+const ALERT_STATE_PATH = path.join(STATE_DIR, 'alerts.json');
 const CONFIG_PATH = path.join(__dirname, 'watchdog.config.json');
 const LABEL = 'ai.openclaw.watchdog';
 const PLIST_PATH = path.join(os.homedir(), 'Library', 'LaunchAgents', `${LABEL}.plist`);
@@ -31,6 +32,10 @@ const DEFAULT_CONFIG = {
   gatewayPort: DEFAULT_GATEWAY_PORT,
   allowDowngrade: false,
   openclawBin: process.env.OPENCLAW_BIN || 'openclaw',
+  discordWebhookUrl: process.env.OPENCLAW_WATCHDOG_DISCORD_WEBHOOK_URL || '',
+  discordWebhookUrlFile: '',
+  alertCooldownHours: 23,
+  alertOnWarnings: ['model_auth_warning', 'version_mismatch'],
 };
 
 function ensureDirs() {
@@ -84,6 +89,25 @@ function snippet(text) {
 function writeLog(record) {
   ensureDirs();
   fs.appendFileSync(logPath(), `${JSON.stringify({ timestamp: nowIso(), ...record })}\n`);
+}
+
+function readJsonFile(filePath, fallback) {
+  try {
+    if (!fs.existsSync(filePath)) return fallback;
+    return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJsonFile(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
+}
+
+function expandHome(value) {
+  if (typeof value !== 'string') return value;
+  return value.replace(/^~(?=$|\/)/, os.homedir());
 }
 
 function runCommand(argv, options = {}) {
@@ -160,6 +184,19 @@ function addIssue(issues, id, severity, message, data = {}) {
   issues.push({ id, severity, message, ...data });
 }
 
+function errorIssues(summary) {
+  return summary.issues.filter((issue) => issue.severity === 'error');
+}
+
+function alertableIssues(summary, config) {
+  const warningIds = new Set(config.alertOnWarnings || []);
+  return summary.issues.filter((issue) => issue.severity === 'error' || warningIds.has(issue.id));
+}
+
+function shouldRepair(summary) {
+  return errorIssues(summary).length > 0;
+}
+
 function versionFromOutput(output) {
   const match = output.match(/OpenClaw\s+([0-9]+\.[0-9]+\.[0-9]+)/i);
   return match ? match[1] : null;
@@ -173,6 +210,89 @@ function hasFatalModelAuth(output) {
 
 function hasModelAuthWarning(output) {
   return /OAuth\/token status[\s\S]*\bexpired\b/i.test(output);
+}
+
+function discordWebhookUrl(config) {
+  if (config.discordWebhookUrl) return config.discordWebhookUrl;
+  if (!config.discordWebhookUrlFile) return '';
+  const filePath = expandHome(config.discordWebhookUrlFile);
+  try {
+    return fs.readFileSync(filePath, 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
+function alertKey(summary) {
+  return summary.issues
+    .map((issue) => `${issue.severity}:${issue.id}`)
+    .sort()
+    .join('|') || 'ok';
+}
+
+function alertTitle(summary) {
+  if (!summary.ok) return 'OpenClaw watchdog error';
+  if (summary.issues.some((issue) => issue.id === 'model_auth_warning')) return 'OpenClaw OAuth warning';
+  return 'OpenClaw watchdog warning';
+}
+
+function alertContent(summary, issues) {
+  const lines = [
+    `**${alertTitle(summary)}**`,
+    `Version: ${summary.version || 'unknown'}`,
+    `Status: ${summary.ok ? 'ok with warnings' : 'unhealthy'}`,
+    '',
+    ...issues.slice(0, 8).map((issue) => `- ${issue.severity.toUpperCase()} ${issue.id}: ${issue.message}`),
+  ];
+  if (issues.length > 8) lines.push(`- ...and ${issues.length - 8} more`);
+  lines.push('', `Log: ${logPath()}`);
+  return redact(lines.join('\n')).slice(0, 1900);
+}
+
+async function maybeSendAlert(summary, phase) {
+  const config = loadConfig();
+  const url = discordWebhookUrl(config);
+  const issues = alertableIssues(summary, config);
+  if (!url || issues.length === 0) return;
+
+  const state = readJsonFile(ALERT_STATE_PATH, {});
+  const key = alertKey({ ...summary, issues });
+  const cooldownMs = Math.max(1, Number(config.alertCooldownHours || 23)) * 60 * 60 * 1000;
+  const previous = state[key] || 0;
+  if (Date.now() - previous < cooldownMs) {
+    writeLog({ phase: 'alert', command: 'discord webhook', exitCode: 0, durationMs: 0, decision: { sent: false, reason: 'cooldown', key } });
+    return;
+  }
+
+  const started = Date.now();
+  try {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        username: 'OpenClaw Watchdog',
+        content: alertContent(summary, issues),
+      }),
+    });
+    state[key] = Date.now();
+    writeJsonFile(ALERT_STATE_PATH, state);
+    writeLog({
+      phase: 'alert',
+      command: 'discord webhook',
+      exitCode: response.ok ? 0 : 1,
+      durationMs: Date.now() - started,
+      decision: { sent: response.ok, status: response.status, phase, key },
+    });
+  } catch (error) {
+    writeLog({
+      phase: 'alert',
+      command: 'discord webhook',
+      exitCode: 1,
+      durationMs: Date.now() - started,
+      stderr: snippet(error.message),
+      decision: { sent: false, phase, key },
+    });
+  }
 }
 
 async function runChecks(phase = 'check') {
@@ -361,14 +481,20 @@ async function repair() {
   if (!after.ok && before.issues.some((issue) => issue.id === 'version_mismatch') && !config.allowDowngrade) {
     writeLog({ phase: 'repair', command: 'downgrade', exitCode: 0, durationMs: 0, decision: 'skipped: allowDowngrade is false' });
   }
+  await maybeSendAlert(after, 'repair');
   return after;
 }
 
 async function once() {
   const first = await runChecks('check');
-  if (first.ok && !first.suspicious) return first;
-  writeLog({ phase: 'check', command: 'decision', exitCode: 0, durationMs: 0, decision: 'running repair because check found errors or suspicious drift' });
-  return repair();
+  if (!shouldRepair(first)) {
+    await maybeSendAlert(first, 'check');
+    return first;
+  }
+  writeLog({ phase: 'check', command: 'decision', exitCode: 0, durationMs: 0, decision: 'running repair because check found errors' });
+  const after = await repair();
+  await maybeSendAlert(after, 'verify');
+  return after;
 }
 
 function launchctl(args) {
