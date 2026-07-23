@@ -5,8 +5,9 @@
   "openclawBin": "openclaw",
   "discordWebhookUrlFile": "~/.openclaw/openclaw-watchdog-discord-webhook.secret",
   "alertCooldownHours": 23,
+  "modelAuthExpiryNoticeHours": 24,
   "alertOnWarnings": [
-    "model_auth_warning",
+    "model_auth_expiring",
     "version_mismatch"
   ]
 }

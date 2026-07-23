@@ -48,10 +48,12 @@ chmod 600 ~/.openclaw/openclaw-watchdog-discord-webhook.secret
 
 By default, alerts are sent for all error findings and these warning findings:
 
-- `model_auth_warning`
+- `model_auth_expiring`
 - `version_mismatch`
 
 The same alert signature is throttled by `alertCooldownHours`.
+
+`model_auth_warning` means a stored OAuth access token is already expired but runtime auth is still usable. OpenClaw is expected to refresh access tokens automatically, so that finding is logged but not alerted by default. `model_auth_expiring` is emitted only when the CLI reports a finite future OAuth expiry inside `modelAuthExpiryNoticeHours`.
 
 ## Safety
 

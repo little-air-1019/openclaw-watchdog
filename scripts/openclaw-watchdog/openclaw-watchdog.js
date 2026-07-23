@@ -35,7 +35,8 @@ const DEFAULT_CONFIG = {
   discordWebhookUrl: process.env.OPENCLAW_WATCHDOG_DISCORD_WEBHOOK_URL || '',
   discordWebhookUrlFile: '',
   alertCooldownHours: 23,
-  alertOnWarnings: ['model_auth_warning', 'version_mismatch'],
+  modelAuthExpiryNoticeHours: 24,
+  alertOnWarnings: ['model_auth_expiring', 'version_mismatch'],
 };
 
 function ensureDirs() {
@@ -208,8 +209,21 @@ function hasFatalModelAuth(output) {
   return false;
 }
 
-function hasModelAuthWarning(output) {
+function hasExpiredStoredOAuthProfile(output) {
   return /OAuth\/token status[\s\S]*\bexpired\b/i.test(output);
+}
+
+function modelAuthExpiryMinutes(output) {
+  const matches = [...output.matchAll(/expires in\s+(-?\d+)\s*([mhd])/gi)];
+  const minutes = matches.map((match) => {
+    const value = Number(match[1]);
+    const unit = match[2].toLowerCase();
+    if (!Number.isFinite(value)) return null;
+    if (unit === 'h') return value * 60;
+    if (unit === 'd') return value * 24 * 60;
+    return value;
+  }).filter((value) => value !== null && value > 0);
+  return minutes.length ? Math.min(...minutes) : null;
 }
 
 function discordWebhookUrl(config) {
@@ -362,7 +376,14 @@ async function runChecks(phase = 'check') {
   const modelOutput = `${results.modelsStatus.stdout}\n${results.modelsStatus.stderr}`;
   if (results.modelsStatus.exitCode !== 0 || hasFatalModelAuth(modelOutput)) {
     addIssue(issues, 'model_auth_unusable', 'error', 'Model authentication appears unusable or expired');
-  } else if (hasModelAuthWarning(modelOutput)) {
+  } else {
+    const expiryMinutes = modelAuthExpiryMinutes(modelOutput);
+    const noticeMinutes = Math.max(1, Number(config.modelAuthExpiryNoticeHours || 24)) * 60;
+    if (expiryMinutes !== null && expiryMinutes <= noticeMinutes) {
+      addIssue(issues, 'model_auth_expiring', 'warning', `Model OAuth access token expires in about ${expiryMinutes} minutes`, { remainingMinutes: expiryMinutes });
+    }
+  }
+  if (hasExpiredStoredOAuthProfile(modelOutput)) {
     addIssue(issues, 'model_auth_warning', 'warning', 'A stored model OAuth profile is expired, but runtime auth is currently usable');
   }
 
